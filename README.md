@@ -8,7 +8,7 @@ The examples use GoReleaser and nFPM for Go and Rust. GoReleaser's Rust builder 
 
 1. Use this repository as a GitHub template or copy one example directory into a new repository.
 2. Keep the example `.goreleaser.yaml`, edit its project name and package metadata, and place it at the root of the new project.
-3. Copy the example caller workflow into `.github/workflows/release.yml`. It calls this repository's reusable workflow at the `0.1.0` tag.
+3. Copy the example caller workflow into `.github/workflows/release.yml`. It calls this repository's reusable workflow at the `0.1.1` tag.
 4. Set the GitHub Actions workflow token to allow release creation (`contents: write`). No separate secret is needed for GitHub Releases.
 5. Push a SemVer tag without a `v` prefix, such as `0.1.0`. The workflow publishes a GitHub Release.
 
