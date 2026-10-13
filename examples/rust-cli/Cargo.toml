@@ -1,0 +1,8 @@
+[package]
+name = "example-rust-cli"
+version = "0.1.0"
+edition = "2024"
+description = "A small CLI used to validate the release workflow template"
+license = "MIT"
+
+[dependencies]

@@ -1,0 +1,33 @@
+version: 2
+project_name: example-rust-cli
+
+builds:
+  - id: example-rust-cli
+    builder: rust
+    binary: example-rust-cli
+    targets: [x86_64-unknown-linux-gnu]
+    command: build
+    flags: [--release, --locked]
+
+archives:
+  - ids: [example-rust-cli]
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files: [LICENSE, README.md]
+
+nfpms:
+  - package_name: example-rust-cli
+    ids: [example-rust-cli]
+    maintainer: Set Your Name
+    description: Replace with a short description of your CLI.
+    license: MIT
+    formats: [deb, rpm, archlinux]
+    bindir: /usr/bin
+
+checksum:
+  name_template: checksums.txt
+
+release:
+  draft: true
+  use_existing_draft: true
+  replace_existing_artifacts: true

@@ -1,0 +1,13 @@
+**/target/
+/dist/
+/bin/
+*.test
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.key
+.DS_Store
+*.swp
+*.log

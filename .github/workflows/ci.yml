@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  examples:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: examples/go-cli/go.mod
+      - uses: dtolnay/rust-toolchain@stable
+      - run: go test ./...
+        working-directory: examples/go-cli
+      - run: cargo test --locked
+        working-directory: examples/rust-cli
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: v2.18.3
+          args: check --config examples/go-cli/.goreleaser.yaml
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: v2.18.3
+          args: check --config examples/rust-cli/.goreleaser.yaml

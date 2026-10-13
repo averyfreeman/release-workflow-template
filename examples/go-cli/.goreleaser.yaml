@@ -1,0 +1,37 @@
+version: 2
+project_name: example-go-cli
+
+builds:
+  - id: example-go-cli
+    main: .
+    binary: example-go-cli
+    goos: [linux]
+    goarch: [amd64]
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - ids: [example-go-cli]
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files: [LICENSE, README.md]
+
+nfpms:
+  - package_name: example-go-cli
+    ids: [example-go-cli]
+    maintainer: Set Your Name
+    description: Replace with a short description of your CLI.
+    license: MIT
+    formats: [deb, rpm, archlinux]
+    bindir: /usr/bin
+
+checksum:
+  name_template: checksums.txt
+
+release:
+  draft: true
+  use_existing_draft: true
+  replace_existing_artifacts: true

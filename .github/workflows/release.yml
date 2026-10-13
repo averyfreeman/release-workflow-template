@@ -1,0 +1,177 @@
+name: Reusable CLI release
+
+on:
+  workflow_call:
+    inputs:
+      language:
+        description: "Project language: go or rust"
+        required: true
+        type: string
+      binary:
+        description: Executable name produced by the project
+        required: true
+        type: string
+      package-identifier:
+        description: macOS pkgbuild identifier, such as com.example.myapp
+        required: true
+        type: string
+      goreleaser-config:
+        description: Path to GoReleaser configuration in the consuming repository
+        required: false
+        default: .goreleaser.yaml
+        type: string
+      working-directory:
+        description: Project directory in the consuming repository
+        required: false
+        default: .
+        type: string
+      go-version-file:
+        description: Go version source used by setup-go
+        required: false
+        default: go.mod
+        type: string
+      rust-toolchain:
+        description: Rust toolchain channel
+        required: false
+        default: stable
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  linux-release:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        if: inputs.language == 'go'
+        with:
+          go-version-file: ${{ inputs.working-directory }}/${{ inputs.go-version-file }}
+          cache: true
+      - uses: dtolnay/rust-toolchain@stable
+        if: inputs.language == 'rust'
+        with:
+          toolchain: ${{ inputs.rust-toolchain }}
+      - name: Validate release language
+        env:
+          LANGUAGE: ${{ inputs.language }}
+        run: |
+          case "$LANGUAGE" in
+            go|rust) ;;
+            *) echo "language must be go or rust" >&2; exit 2 ;;
+          esac
+      - name: Check Rust package version matches the Git tag
+        if: inputs.language == 'rust'
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          package_version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
+          test "$package_version" = "$VERSION" || {
+            echo "Cargo package version $package_version does not match tag $VERSION" >&2
+            exit 1
+          }
+      - name: Test Go project
+        if: inputs.language == 'go'
+        working-directory: ${{ inputs.working-directory }}
+        run: go test ./...
+      - name: Test Rust project
+        if: inputs.language == 'rust'
+        working-directory: ${{ inputs.working-directory }}
+        run: cargo test --locked
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: v2.18.3
+          args: release --clean --config ${{ inputs.working-directory }}/${{ inputs.goreleaser-config }}
+          workdir: ${{ inputs.working-directory }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  macos-pkg:
+    needs: linux-release
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            arch: amd64
+          - runner: macos-15
+            arch: arm64
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref }}
+      - uses: actions/setup-go@v6
+        if: inputs.language == 'go'
+        with:
+          go-version-file: ${{ inputs.working-directory }}/${{ inputs.go-version-file }}
+          cache: true
+      - uses: dtolnay/rust-toolchain@stable
+        if: inputs.language == 'rust'
+        with:
+          toolchain: ${{ inputs.rust-toolchain }}
+      - name: Build native macOS executable
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          LANGUAGE: ${{ inputs.language }}
+          BINARY: ${{ inputs.binary }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/pkgroot/usr/local/bin"
+          case "$LANGUAGE" in
+            go)
+              go build -trimpath -ldflags="-s -w -X main.version=$VERSION" -o "$RUNNER_TEMP/pkgroot/usr/local/bin/$BINARY" .
+              ;;
+            rust)
+              cargo build --locked --release
+              install -m 755 "target/release/$BINARY" "$RUNNER_TEMP/pkgroot/usr/local/bin/$BINARY"
+              ;;
+            *) echo "language must be go or rust" >&2; exit 2 ;;
+          esac
+      - name: Build installer and checksum
+        env:
+          VERSION: ${{ github.ref_name }}
+          ARCH: ${{ matrix.arch }}
+          PACKAGE_IDENTIFIER: ${{ inputs.package-identifier }}
+          BINARY: ${{ inputs.binary }}
+        run: |
+          mkdir -p dist
+          sudo xattr -cr "$RUNNER_TEMP/pkgroot"
+          if xattr -lr "$RUNNER_TEMP/pkgroot" | grep -q .; then
+            echo "package staging still has extended attributes" >&2
+            exit 1
+          fi
+          pkgbuild \
+            --root "$RUNNER_TEMP/pkgroot" \
+            --identifier "$PACKAGE_IDENTIFIER" \
+            --version "$VERSION" \
+            --install-location / \
+            "dist/${BINARY}_${VERSION}_darwin_${ARCH}.pkg"
+          shasum -a 256 "dist/${BINARY}_${VERSION}_darwin_${ARCH}.pkg" > "dist/${BINARY}_${VERSION}_darwin_${ARCH}.pkg.sha256"
+      - name: Upload macOS package
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ github.ref_name }}
+          ARCH: ${{ matrix.arch }}
+          BINARY: ${{ inputs.binary }}
+        run: gh release upload "$VERSION" "dist/${BINARY}_${VERSION}_darwin_${ARCH}.pkg" "dist/${BINARY}_${VERSION}_darwin_${ARCH}.pkg.sha256"
+
+  publish:
+    needs: macos-pkg
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Publish complete release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ github.ref_name }}
+        run: gh release edit "$VERSION" --draft=false
