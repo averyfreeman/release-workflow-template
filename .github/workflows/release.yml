@@ -35,6 +35,11 @@ on:
         required: false
         default: stable
         type: string
+      index-go-module:
+        description: Prompt the public Go module proxy to index this root module after release
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -65,6 +70,15 @@ jobs:
             go|rust) ;;
             *) echo "language must be go or rust" >&2; exit 2 ;;
           esac
+      - name: Validate Go module tag
+        if: inputs.language == 'go'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Go module releases require a stable SemVer tag such as v0.1.0; got $TAG" >&2
+            exit 1
+          fi
       - name: Check Rust package version matches the Git tag
         if: inputs.language == 'rust'
         working-directory: ${{ inputs.working-directory }}
@@ -123,8 +137,9 @@ jobs:
         env:
           LANGUAGE: ${{ inputs.language }}
           BINARY: ${{ inputs.binary }}
-          VERSION: ${{ github.ref_name }}
+          TAG: ${{ github.ref_name }}
         run: |
+          if [[ "$LANGUAGE" == go ]]; then VERSION="${TAG#v}"; else VERSION="$TAG"; fi
           mkdir -p "$RUNNER_TEMP/pkgroot/usr/local/bin"
           case "$LANGUAGE" in
             go)
@@ -138,11 +153,12 @@ jobs:
           esac
       - name: Build installer and checksum
         env:
-          VERSION: ${{ github.ref_name }}
+          TAG: ${{ github.ref_name }}
           ARCH: ${{ matrix.arch }}
           PACKAGE_IDENTIFIER: ${{ inputs.package-identifier }}
           BINARY: ${{ inputs.binary }}
         run: |
+          if [[ "${TAG}" == v* ]]; then VERSION="${TAG#v}"; else VERSION="$TAG"; fi
           mkdir -p dist
           sudo xattr -cr "$RUNNER_TEMP/pkgroot"
           if xattr -lr "$RUNNER_TEMP/pkgroot" | grep -q .; then
@@ -159,10 +175,12 @@ jobs:
       - name: Upload macOS package
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ github.ref_name }}
+          TAG: ${{ github.ref_name }}
           ARCH: ${{ matrix.arch }}
           BINARY: ${{ inputs.binary }}
-        run: gh release upload "$VERSION" "dist/${BINARY}_${VERSION}_darwin_${ARCH}.pkg" "dist/${BINARY}_${VERSION}_darwin_${ARCH}.pkg.sha256"
+        run: |
+          if [[ "$TAG" == v* ]]; then VERSION="${TAG#v}"; else VERSION="$TAG"; fi
+          gh release upload "$TAG" "dist/${BINARY}_${VERSION}_darwin_${ARCH}.pkg" "dist/${BINARY}_${VERSION}_darwin_${ARCH}.pkg.sha256" --clobber
 
   publish:
     needs: macos-pkg
@@ -173,5 +191,42 @@ jobs:
       - name: Publish complete release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ github.ref_name }}
-        run: gh release edit "$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false
+          TAG: ${{ github.ref_name }}
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+
+  go-module-index:
+    needs: publish
+    if: inputs.language == 'go' && inputs.index-go-module
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: ${{ inputs.working-directory }}/${{ inputs.go-version-file }}
+          cache: true
+      - name: Request Go module proxy indexing
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          TAG: ${{ github.ref_name }}
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        run: |
+          if [[ "$WORKING_DIRECTORY" != "." && "$WORKING_DIRECTORY" != "./" ]]; then
+            echo "Go module indexing currently supports a module at the repository root" >&2
+            exit 1
+          fi
+          if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Go module indexing requires a stable SemVer tag such as v0.1.0; got $TAG" >&2
+            exit 1
+          fi
+          module_path="$(go list -m)"
+          for attempt in $(seq 1 12); do
+            if GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org go list -m "${module_path}@${TAG}"; then
+              exit 0
+            fi
+            echo "Go proxy has not indexed ${module_path}@${TAG} yet (attempt ${attempt}/12)"
+            sleep 10
+          done
+          echo "Go proxy did not index ${module_path}@${TAG} after 120 seconds" >&2
+          exit 1
